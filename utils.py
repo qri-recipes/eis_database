@@ -1,5 +1,21 @@
+from collections import OrderedDict
+from subprocess import Popen, PIPE
+import datetime
+import json
+import os
 import random
+import re
+import requests
+import shlex
+import sys
 import time
+
+
+_MAX_ATTEMPTS = 10
+_DELAY = .1
+NOW = datetime.datetime.now()
+TIME_STAMP = datetime.datetime.strftime(NOW, "%Y-%m-%dT%H:%M:%S")
+
 
 def wait_a_sec():
   sleep_time = random.random()
@@ -16,5 +32,83 @@ def print_config(args):
   print("---")
 
 
+
+
+# --------------------------------------------------------------------
+def _shell_exec_once(command):
+    proc = Popen(shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    stdoutdata, err = proc.communicate()
+    if err != "" and err.decode("utf-8") != "":
+        # print("err was: '{}' type: {}".format(err, type(err)))
+        raise Exception(err)
+    return stdoutdata.decode("utf-8")
+
+def _shell_exec(command):
+    stdoutdata = _shell_exec_once(command)
+    for _ in range(_MAX_ATTEMPTS - 1):
+        if "error" not in stdoutdata[:15]:
+            break
+        time.sleep(_DELAY)
+        stdoutdata = _shell_exec_once(command)
+    return stdoutdata
+
+# --------------------------------------------------------------------
+
+def add_to_ipfs(path):
+  ipfs_hash = ""
+  cmd = "ipfs add \"{}\"".format(path)
+  result = _shell_exec_once(path)
+  if result[-1].split(" ")[0] == "added":
+    info = result[-1].split(" ")
+    ipfs_hash = info[1]
+  else:
+    print("failed to add '{}' to ipfs".format(path))
+  return ipfs_hash
+  
+def fetch_and_add_to_ipfs(url, name):
+  #download file to /tmp/[name]
+  # add to ipfs
+  # return hash
+  tmp_path = os.path.join("/tmp/", name)
+  cmd = "curl -o \"{}\" {}".format(tmp_path, url)
+  result = _shell_exec_once(cmd)
+  return add_to_ipfs(tmp_path)
+
+
+# --------------------------------------------------------------------
+
+def add_qri_dataset(dataset_name, data_path, structure_path, meta_path):
+  cmd = "qri add "
+  cmd += "--data \"{}\" ".format(data_path)
+  cmd += "--structure \"{}\" ".format(structure_path)
+  cmd += "--meta \"{}\" ".format(meta_path)
+  cmd += "me/{} ".format(dataset_name)
+  # result = _shell_exec(cmd)
+  result = _shell_exec_once(cmd)
+  return result
+
+
+def update_qri_dataset(dataset_name, data_path, structure_path, meta_path, commit_msg):
+  cmd = "qri save "
+  cmd += "-m \"{}\" ".format(commit_msg)
+  cmd += "--data \"{}\" ".format(data_path)
+  cmd += "--structure \"{}\" ".format(structure_path)
+  cmd += "--meta \"{}\" ".format(meta_path)
+  cmd += "me/{} ".format(dataset_name)
+  # result = _shell_exec(cmd)
+  result = _shell_exec_once(cmd)
+  return result
+
+def add_or_save_to_qri(dataset_name, data_path, structure_path, meta_path):
+  if _dataset_exists(dataset_name):
+    # set commit message and choose 'save'
+    commit_msg = "recipe update @ {}".format(TIME_STAMP)
+    result = update_qri_dataset(dataset_name, data_path, structure_path, meta_path, commit_msg)
+  else:
+    result = add_qri_dataset(dataset_name, data_path, structure_path, meta_path)
+  return result
+
+
 def add_to_qri(args):
   print("...adding to qri")
+

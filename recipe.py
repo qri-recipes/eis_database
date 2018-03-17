@@ -48,12 +48,6 @@ def get_download_links(soup, filter_str="attachmentId="):
       name_and_ref_list.append(download_info)
   return name_and_ref_list
     
-def fetch_and_add_to_ipfs(url, name):
-  #download file to /tmp/[name]
-  # add to ipfs
-  # return hash
-  ipfs_hash = ""
-  return return ipfs_hash
 
 def get_json_from_eis_page(html_str, eisId):
   items = OrderedDict()
