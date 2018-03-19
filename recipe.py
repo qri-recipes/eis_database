@@ -19,6 +19,7 @@ import requests
 import sys
 import threading
 import time
+import urllib
 import utils
 
 
@@ -49,7 +50,7 @@ def get_download_links(soup, filter_str="attachmentId="):
   return name_and_ref_list
     
 
-def get_json_from_eis_page(html_str, eisId):
+def get_json_from_eis_page(html_str, eisId, handle_attachments=True):
   items = OrderedDict()
   soup = BeautifulSoup(html_str, 'html.parser')
   div_group = soup.find(class_="fieldset-wrapper")
@@ -66,6 +67,8 @@ def get_json_from_eis_page(html_str, eisId):
       items[header_text] = vals
   if len(items.keys()) > 0:
     items["eisId"] = eisId
+    #get download links
+    items["files"] = get_download_links(soup)
   return items
 
 class LinkChecker(threading.Thread):
@@ -156,9 +159,18 @@ class PageExtractor(threading.Thread):
       eisId = self.queue.get()
       try:
         page_text = fetch_page_text(eisId, self.url, self.param_name)
+        # utils.wait_a_sec() # adds a < 1 sec delay between requests
+        # result = self.extract_func(page_text, eisId)
+        # if len(result.keys()) > 0:
+        #   self.success_q.put(result)
+        #   print(".", end='', flush=True)
+        # else:
+        #   self.fail_q2.put(eisId)
+        #   print("*", end='', flush=True)
         try:
           utils.wait_a_sec() # adds a < 1 sec delay between requests
           result = self.extract_func(page_text, eisId)
+          # x = 1
           if len(result.keys()) > 0:
             self.success_q.put(result)
             print(".", end='', flush=True)
@@ -202,6 +214,99 @@ def extractPages(args):
   metadata_list = list(success_q.queue)
   return metadata_list
 
+class FileDownloader(threading.Thread):
+  def __init__(self, url, work_queue, add_queue, fail_q1):
+    threading.Thread.__init__(self)
+    self.work_queue = work_queue
+    self.add_queue = add_queue
+    # self.success_q = success_q
+    self.fail_q1 = fail_q1
+    self.url = url
+  def run(self):
+    while True:
+      item = self.work_queue.get()
+      #try:
+      if 'files' in item:
+        files = item['files']
+        # file_hashes = dict()
+        for file in files:
+          name, ref, attachmentId  = file
+          download_url = urllib.parse.urljoin(self.url, ref)
+          
+          temp_path = utils.download_temp_file(download_url, name)
+          utils.wait_a_sec()
+          # ipfs_hash = utils.fetch_and_add_to_ipfs(download_url, name)
+          # file_hashes[name] = ipfs_hash
+        # item['files'] = file_hashes
+        # self.success_q.put(item)
+        self.add_queue.put(item)
+        print(".", end="", flush=True)
+        self.work_queue.task_done
+      else:
+        self.fail_q1.put(item)
+      self.work_queue.task_done()
+
+
+class FileAdder(threading.Thread):
+  def __init__(self, add_queue, success_q, fail_q2):
+    threading.Thread.__init__(self)
+    self.add_queue = add_queue
+    self.success_q = success_q
+    self.fail_q2 = fail_q2
+  def run(self):
+    while True:
+      item = self.add_queue.get()
+      files = item['files']
+      file_hashes = dict()
+      files_ready = True
+      for file in files:
+        name, ref, attachmentId  = file
+        temp_path = os.path.join("temp/", name)
+        if not os.path.exists(path):
+          files_ready = False
+      if not files_ready:
+        self.add_queue.put(item)
+      else:
+        for file in files:
+          name, ref, attachmentId  = file
+          temp_path = os.path.join("temp/", name)
+          ipfs_hash = utils.add_to_ipfs(temp_path)
+          file_hashes[name] = ipfs_hash
+        item['files'] = file_hashes
+        self.success_q.put(item)
+      self.add_queue.task_done()
+
+
+def downladFiles(args):
+  num_threads = args.threads
+  # input
+  work_queue = Queue.Queue()
+  # outputs
+  add_queue = Queue.Queue()
+  success_q = Queue.Queue()
+  fail_q1 = Queue.Queue()
+  fail_q2 = Queue.Queue()
+  for i in range(num_threads):
+    t = FileDownloader(args.url, work_queue, add_queue, fail_q1)
+    t.setDaemon(True)
+    t.start()
+  for i in range(num_threads):
+    t = FileAdder(add_queue, success_q, fail_q2)
+  with open(args.output_file, "r") as fp:
+    metadata_list = json.load(fp)
+
+  for item in metadata_list:
+    work_queue.put(item)
+
+  work_queue.join()
+  add_queue.join()
+  # print results
+  print("count in success_q: {:>6}".format(success_q.qsize()))
+  print("count in fail_q1: {:>6}".format(fail_q1.qsize()))
+
+  metadata_list = list(success_q.queue)
+  fail_list = list(fail_q1.queue)
+  return metadata_list, fail_list
 
 
 def fetch_valid_id_list(args):
@@ -231,6 +336,18 @@ def extract_data_from_pages(args):
     fp.write(json.dumps(metadata_list, indent=2))
     print("...saved metadata for {} pages to '{}'".format(len(metadata_list), args.output_file))
 
+def process_attachments(args):
+  print ("...downloading attachments and adding to ipfs")
+  metadata_list, fail_list = downladFiles(args)
+  output_with_hashes = args.output_file.replace(".json", "_with_hashes.json")
+  with open(output_with_hashes, "w") as fp:
+    fp.write(json.dumps(metadata_list, indent=2))
+    print("...saved metadata with hashes to '{}'".format(output_with_hashes))
+  if len(fail_list) > 0:
+    fail_path = args.output_file.replace(".json", "_with_hashes_failures.json")
+    with open(fail_path, "w") as fp:
+      fp.write(json.dumps(fail_path, indent=2))
+
 def main(args):
   utils.print_config(args)
   if args.config:
@@ -243,6 +360,8 @@ def main(args):
   update_data = args.update_data
   dont_have_data = not os.path.exists(data_file_path)
 
+  download_and_process_attachments = args.download
+
   # check to see if there is an existing file
   # if so, check to see if we want to overwrite it
   if overwrite_ids or dont_have_id_file:
@@ -252,18 +371,21 @@ def main(args):
 
   # then check to see if there is a data file
   # then if so check to see if we want 
-  if update_data or dont_have_data:
-    extract_data_from_pages(args)
-  else:
-    print("...using existing data file '{}'".format(data_file_path))
+  # if update_data or dont_have_data:
+  #   extract_data_from_pages(args)
+  # else:
+  print("...using existing data file '{}'".format(data_file_path))
 
-  utils.add_to_qri(args)
+  if download_and_process_attachments:
+    process_attachments(args)
+
+  #utils.add_to_qri(args)
 
 
 
 
 if __name__ == '__main__':
-  parser = argparse.ArgumentParser(description="This recipe fetches Metadata from the Environmental Impact Statement (EIS) Database.  Content (such as the url and query params can be modified using the arguments under the 'content' and execution and control flow can be modified using the arguments under 'execution'")
+  parser = argparse.ArgumentParser(description="This recipe fetches Metadata from the Environmental Impact Statement (EIS) Database.  Content (such as the url and query params can be modified using the arguments under the 'content' section and execution and control flow can be modified using the arguments under the 'execution' section")
   # Add arguments
   g_content = parser.add_argument_group('content', 'control content parameters')
   g_content.add_argument(
@@ -296,6 +418,13 @@ if __name__ == '__main__':
     default="data.json",
     help="extracted json output path; defaults to 'data.json'", 
     )
+  g_content.add_argument(
+    "--dsname",
+    default="eis_database",
+    help="qri dataset name"
+    )
+  # g_content.add_argument(
+  #   "--")
   # parser.add_argument(
   #   "--url", help='base url to fetch', default="https://cdxnodengn.epa.gov/cdx-enepa-II/public/action/eis/details")
   g_flow = parser.add_argument_group('execution', 'control execution and control flow')
@@ -319,6 +448,16 @@ if __name__ == '__main__':
     action="store_true",
     default=True,
     help="update the output data independent of whether there not there is a pre-existing id list; defaults to True")
+  g_flow.add_argument(
+    "-d", "--download",
+    action="store_true",
+    default=True,
+    help="download attachments and add to ipfs; defaults to True")
+  g_flow.add_argument(
+    "-a", "--add",
+    action="store_true",
+    default=True,
+    help="add to qri; defaults to True")
 
 
   args = parser.parse_args()

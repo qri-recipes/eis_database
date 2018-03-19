@@ -32,16 +32,30 @@ def print_config(args):
   print("---")
 
 
-
+# _dataset_exists checks whether a dataset exists by attempting to 
+#   request info on the dataset and seeing if it errors or not
+def _dataset_exists(dataset_name):
+  exists = True
+  cmd = "qri info me/{}".format(dataset_name)
+  result = _shell_exec_once(cmd)
+  for line in result.split("\n"):
+    if re.match(r'^error', line) or "key not found" in line:
+      exists = False
+      break
+  return exists
 
 # --------------------------------------------------------------------
 def _shell_exec_once(command):
     proc = Popen(shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=PIPE)
     stdoutdata, err = proc.communicate()
-    if err != "" and err.decode("utf-8") != "":
-        # print("err was: '{}' type: {}".format(err, type(err)))
-        raise Exception(err)
-    return stdoutdata.decode("utf-8")
+    if len(stdoutdata) > 0:
+      return stdoutdata
+    if len(err) > 0:
+      return err
+    # if err != "" and err.decode("utf-8") != "":
+    #     # print("err was: '{}' type: {}".format(err, type(err)))
+    #     raise Exception(err)
+    # return stdoutdata.decode("utf-8")
 
 def _shell_exec(command):
     stdoutdata = _shell_exec_once(command)
@@ -53,6 +67,13 @@ def _shell_exec(command):
     return stdoutdata
 
 # --------------------------------------------------------------------
+def download_temp_file(url, name, temp_dir="temp/"):
+  temp_path = os.path.join(temp_dir, name)
+  cmd = "curl -o \"{}\" {}".format(temp_path, url)
+  result = _shell_exec_once(cmd)
+  return result
+
+
 
 def add_to_ipfs(path):
   ipfs_hash = ""
@@ -65,14 +86,16 @@ def add_to_ipfs(path):
     print("failed to add '{}' to ipfs".format(path))
   return ipfs_hash
   
-def fetch_and_add_to_ipfs(url, name):
-  #download file to /tmp/[name]
-  # add to ipfs
-  # return hash
-  tmp_path = os.path.join("/tmp/", name)
-  cmd = "curl -o \"{}\" {}".format(tmp_path, url)
-  result = _shell_exec_once(cmd)
-  return add_to_ipfs(tmp_path)
+# def fetch_and_add_to_ipfs(url, name):
+#   #download file to /tmp/[name]
+#   # add to ipfs
+#   # return hash
+#   # tmp_path = os.path.join("/tmp/", name)
+#   tmp_path = os.path.join("temp/", name)
+#   cmd = "curl -o \"{}\" {}".format(tmp_path, url)
+#   result = _shell_exec_once(cmd)
+#   return add_to_ipfs(tmp_path)
+
 
 
 # --------------------------------------------------------------------
