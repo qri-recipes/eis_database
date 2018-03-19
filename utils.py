@@ -49,43 +49,66 @@ def _shell_exec_once(command):
     proc = Popen(shlex.split(command), stdin=PIPE, stdout=PIPE, stderr=PIPE)
     stdoutdata, err = proc.communicate()
     if len(stdoutdata) > 0:
-      return stdoutdata
+      try:
+        return stdoutdata.decode("utf-8")
+      except:
+        return stdoutdata
     if len(err) > 0:
-      return err
+      try:
+        return err.decode("utf-8")
+      except:
+        return err
     # if err != "" and err.decode("utf-8") != "":
     #     # print("err was: '{}' type: {}".format(err, type(err)))
     #     raise Exception(err)
     # return stdoutdata.decode("utf-8")
 
-def _shell_exec(command):
-    stdoutdata = _shell_exec_once(command)
-    for _ in range(_MAX_ATTEMPTS - 1):
-        if "error" not in stdoutdata[:15]:
-            break
-        time.sleep(_DELAY)
-        stdoutdata = _shell_exec_once(command)
-    return stdoutdata
+# def _shell_exec(command):
+#     stdoutdata = _shell_exec_once(command)
+#     for _ in range(_MAX_ATTEMPTS - 1):
+#         if "error" not in stdoutdata[:15]:
+#             break
+#         time.sleep(_DELAY)
+#         stdoutdata = _shell_exec_once(command)
+#     return stdoutdata
 
 # --------------------------------------------------------------------
-def download_temp_file(url, name, temp_dir="temp/"):
+def download_temp_file(url, name, temp_dir, fail_queue):
   temp_path = os.path.join(temp_dir, name)
-  cmd = "curl -o \"{}\" {}".format(temp_path, url)
-  result = _shell_exec_once(cmd)
-  return result
+  if not os.path.exists(temp_path):
+    wait_a_sec()
+    try:
+      resp = requests.get(url, timeout=0.01)
+      with open(temp_path, "wb+") as fp:
+        fp.write(resp.content)
+      if os.path.exists(temp_path):
+        os.chmod(temp_path, 0o777)
+    except:
+      details = (url, name, temp_dir)
+      fail_queue.put(details)
+  return temp_path
 
 
 
 def add_to_ipfs(path):
   ipfs_hash = ""
   cmd = "ipfs add \"{}\"".format(path)
-  result = _shell_exec_once(path)
-  if result[-1].split(" ")[0] == "added":
-    info = result[-1].split(" ")
+  result = _shell_exec_once(cmd)
+  wait_a_sec()
+  if result.split(" ")[0] == "added":
+    info = result.split(" ")
     ipfs_hash = info[1]
   else:
     print("failed to add '{}' to ipfs".format(path))
   return ipfs_hash
-  
+
+# def fetch_and_add_to_ipfs(url, name, temp_dir="temp/"):
+#   temp_path = download_temp_file(url, name, temp_dir)
+#   ipfs_hash = add_to_ipfs(temp_path)
+#   cmd = "rm -f \"{}\"".format(temp_path)
+#   _shell_exec_once(cmd)
+#   return ipfs_hash
+
 # def fetch_and_add_to_ipfs(url, name):
 #   #download file to /tmp/[name]
 #   # add to ipfs
